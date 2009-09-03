@@ -1,0 +1,492 @@
+#!/usr/bin/perl -w 
+
+my $DEBUG 			= 0;
+my $CONFIG 			= "/etc/spineld.conf";	# config file
+my $READ_TIMEOUT 	= 1;		# read timeout in seconds (used when a device doesn't response)
+my $STATFILE 		= "/var/spool/spineld/values.stat";
+my $VALID_DELAY		= 30;		# how long will be enquired value consodered as valid (solve read errors)
+my $DATA;					# structure for enquired data format 
+                            # $DATA->{"key"}->{"ip"}		# ip address of the GNOME 485
+                            # $DATA->{"key"}->{"addr"}	# RS 485 address
+                            # $DATA->{"key"}->{"chan"}	# channel 
+                            # $DATA->{"key"}->{"raw_value"}   # value enquired from a device
+                            # $DATA->{"key"}->{"value"}   # final value (= raw_value * koef_a + koef_b)
+                            # $DATA->{"key"}->{"valid"}   # flag if value is valid
+                            # $DATA->{"key"}->{"expr"}    # conversion expression
+                            # $DATA->{"key"}->{"descr"}   # text description
+                            # $DATA->{"key"}->{"updated"}   # timestamp of the last item update
+							#           
+my $STATS;					# statistics info per a device
+							# $STATS->{"ip:port, 0x<addr>}->{"requestes"} - total number of read requests
+							# $STATS->{"ip:port, 0x<addr>}->{"err_noresp"} - error - no response to an answer
+							# $STATS->{"ip:port, 0x<addr>}->{"err_packets"} - error - total number of error packets
+							# $STATS->{"ip:port, 0x<addr>}->{"reset_ts"} - the timestamp of last counters reset
+							# $STATS->{"ip:port, 0x<addr>}->{"update_ts"} - the timestamp of the last update
+my $EXPR;					# description of expressions for computed values
+							# $EXPR->{"key"} = <expression>
+my %OPTS;
+
+use strict;
+use IO::Socket;
+use Data::Dumper;
+use File::Basename;
+use Time::HiRes qw(usleep);
+use POSIX qw(strftime);
+use Getopt::Std;
+
+
+# print string in hex format 
+# arg: prefix, string
+sub print_hex($$) {
+	my ($prefix, $data) = @_;
+
+	printf "%s ", $prefix;
+	foreach (split(//, $data)) {
+		printf "%02x ", ord("$_");
+	}
+	print "\n";
+}
+
+# compute checksum for spinel packet
+sub sp_cksum($) {
+	my ($data) = @_;
+
+	my $sum = 0xFF;				
+	for (split(//, $data)) {
+		my ($num) = unpack("C", $_);
+		$sum -= $num;
+	}
+	return pack("C", $sum & 0xFF);
+}
+
+sub hexnum($) {
+	my ($a) = @_;
+
+	if ($a =~ /0x\d*/) {
+		$a = hex($a);
+	}
+	return $a;
+}
+
+# parse config file
+sub parse_config() {
+
+    if ( ! -f $CONFIG ) {
+        printf "Config file %s not found\n", $CONFIG;
+        exit 1;
+    }
+    open F1, "< $CONFIG";
+    my $line;
+	my $cnt = 0;
+    while (<F1>) {
+        chomp ;
+        # join multiple lines
+        if (/(.+)\\$/) {
+            $line .= "$1 ";
+            next;
+        } else {
+            $line .= $_;
+        }
+        # remove comments
+        ($line) = split(/#/, $line);
+        if (defined($line) && $line ne "") {
+            my ($type, $key, $line) = split(/\s+/, $line, 3);
+			if ($type eq "source") {
+            	my ($ip, $addr, $channel, $expr) = split(/\s+/, $line, 4);
+            	$DATA->{$key}->{"ip"} = $ip;
+            	$DATA->{$key}->{"addr"} = hexnum($addr);
+            	$DATA->{$key}->{"channel"} = hexnum($channel);
+            	$DATA->{$key}->{"expr"} = $expr;
+            	$DATA->{$key}->{"line"} = $cnt++;
+			} elsif ($type eq "expr") {
+				$EXPR->{$key} = $line;
+			}
+        }
+        $line = "";
+    }
+}
+
+# store status file
+sub load_stat() {
+	my $dir = dirname($STATFILE);
+	if ( ! -d  $dir ) {
+		printf STDERR "ERROR: Directory %s not found!\n", $dir;
+		exit 1;
+	}
+	if ( -f $STATFILE ) {
+		open F1, "< $STATFILE";
+		my $data = join("", <F1>);
+		my $VAR1;
+		eval($data);
+		$DATA = undef;
+		$DATA = $VAR1;
+		close F1;
+	}
+}
+
+# store status file
+sub store_stat() {
+	open F1, "> $STATFILE.$$";
+	print F1 Dumper($DATA);
+	close F1;
+	rename("$STATFILE.$$", "$STATFILE");
+}
+
+
+
+# apply conversion function 
+# arg: value
+#      eval expr (X will be replaced by value
+#      ex.: 4*X+10
+sub eval_val($$) {
+	my ($x, $expr) = @_;
+
+	$expr =~ s/X/$x/i;
+	my $y = eval $expr;
+
+	return $y; 
+}
+
+# check data received by the server and extract data from packet
+# arg: data received as a response from a sensor
+# return: data field part extractet from the packet
+# i       undef  when data can't be axtracted 
+sub sp_extract_data($) {
+	my ($pkt) = @_;
+
+	return undef if (!defined($pkt) || $pkt eq "");
+
+	my ($pre, $frm, $len, $addr, $sig, $ack) = unpack("CCnCCC", $pkt);
+
+	# check pre and frm 
+	return undef if (!defined($pre) || $pre != 0x2a);
+	return undef if (!defined($frm) || $frm != 0x61);
+	return undef if (!defined($ack) || $ack != 0x00);
+
+	my $data = substr($pkt, 7, length($pkt) - 7 - 2);
+	my $csum = sp_cksum(substr($pkt, 0, length($pkt) - 2));
+	my $psum = substr($pkt, length($pkt) - 2, 1);
+
+	return undef if ($csum ne $psum); 
+
+	return $data;
+}
+
+
+# formatuje pozadavek v protokolu spinel
+# prvni tri argumenty se zadaveji jako ciselne hodnoty 
+# tj. napr pro adresu muzeme pouzit tyto ekvivalentni formaty # 49, 0x31, '1' 
+# stejny mechanizmus plati i pro sig, inst
+# data je retezec kde kazdy znak reprezentuje jeden byte
+# arg: adresa, sig, inst, data
+# priklad: 
+sub sp_prepare_query($$$$) {
+	my ($addr, $sig, $inst, $udata) = @_;
+	my $res = '';	# result packet
+
+	my $udatalen = defined($udata) ? length($udata) : 0;
+
+	# packet formating
+	$res .= pack("C", 0x2a);		# PRE (2B)
+	$res .= pack("C", 0x61);		# FRM (2B)	
+	$res .= pack("n", $udatalen + 5 ); 		# packet length (4B)
+	$res .= pack("C", $addr);		# device addrss (2B)
+	$res .= pack("C", $sig);		# signature (user defined number for completing response) (2B)
+	$res .= pack("C", $inst);		# instruction (2B)
+	$res .= $udata if (defined($udata));	# data (nB)
+	$res .= sp_cksum($res);			# suma
+	$res .= pack("C", 0x0d); 		# CR
+	
+}
+
+# prepare query and wait fot the answer 
+sub sp_query($$$$$$) {
+	my ($sock, $addr, $sig, $inst, $udata, $utimeout) = @_;
+
+	my $data = sp_prepare_query($addr, $sig, $inst, $udata);
+	print_hex("SND:", $data) if ($DEBUG);
+
+	# send data to the sensor
+	usleep(20 * 1000);		# sleep 20ms 
+
+	print $sock $data; 
+	my $buff = "";
+	my $limit = 1000;
+	my $ch = '';
+	my $timeout = 0;
+
+	# read data until 0x0d is sent or number of bytes is bigger than 1000	
+	# we'll use special eval code to read with timeout
+
+	while ($limit-- > 0) {
+		eval {
+			local $SIG{ALRM} = sub { die "alarm\n" }; # NB: \n required
+			alarm $utimeout;
+			my $nread = sysread($sock, $ch, 1);
+			alarm 0;
+		};
+		last if ($@ eq "alarm\n");
+#		printf "# %x %d %s -\n", unpack("C", $ch), $timeout, $@;
+		$buff .= $ch;
+		last if ($ch eq pack("C", 0x0d));
+	}
+
+	print_hex("RCV:", $buff) if ($DEBUG);
+	$data = sp_extract_data($buff);
+
+	return $data;
+}
+
+# load data from sensor through 0x51 instruction and fill into $OUTPUT structure
+# par: socket with open connection to RS485 converter
+#      addr: device address 
+sub sp_get_values($$$) {
+	my ($sock, $ip, $addr) = @_;
+
+	my $data = sp_query($sock, $addr, 0x0, 0x51, pack("C", 0x0), $READ_TIMEOUT);
+
+	return 0 if (!defined($data) || length($data) < 7);
+
+#	print_hex("$ip, $addr DBG:", $data);
+
+	while (defined($data) && length($data) > 0) {
+		my ($chan, $stat, $val, $xdata) = unpack("CCna*", $data);
+		$data = $xdata;
+		$stat = $stat>>7 & 0x1;
+		# find items in $DATA where raw data should be stored
+		foreach my $key (keys %{$DATA}) {
+			next if ($DATA->{$key}->{"ip"} ne $ip);
+			next if ($DATA->{$key}->{"addr"} != $addr);
+			next if ($DATA->{$key}->{"channel"} != $chan);
+			$DATA->{$key}->{"raw_value"} = $val;
+			$DATA->{$key}->{"valid"} = $stat;
+			$DATA->{$key}->{"updated"} = time();
+			$DATA->{$key}->{"value"} = eval_val($val, $DATA->{$key}->{"expr"});
+		}
+	#	print_hex("xx: ", $data);
+	}
+	return 1;
+}
+
+# load number of communication errors hrough 0xf4 instructio and return 
+# par: socket with open connection to RS485 converter
+#      addr: device address 
+sub sp_get_errors($$) {
+	my ($sock, $addr) = @_;
+
+	my $data = sp_query($sock, $addr, 0x0, 0xF4, undef, $READ_TIMEOUT);
+	if (defined($data)) {
+		return unpack("C", $data);
+	} else {
+		return undef;
+	}
+}
+
+# get version through 0xf3 instruction and return 
+# par: socket with open connection to RS485 converter
+#      addr: device address 
+sub sp_get_version($$) {
+	my ($sock, $addr) = @_;
+
+	my $data = sp_query($sock, $addr, 0x0, 0xF3, undef, $READ_TIMEOUT);
+	if (defined($data)) {
+		return unpack("a*", $data);
+	} else {
+		return undef;
+	}
+}
+
+# get serial number through 0xf3 instruction and return 
+# par: socket with open connection to RS485 converter
+#      addr: device address 
+sub sp_get_serial($$) {
+	my ($sock, $addr) = @_;
+
+	my $data = sp_query($sock, $addr, 0x0, 0xFA, undef, $READ_TIMEOUT);
+	if (defined($data)) {
+		return unpack("nna*", $data);
+	} else {
+		return undef;
+	}
+}
+
+# take data from $DATA, group by IP address:port, open 
+# socket and  read data from devices
+sub load_all_sensors() {
+
+	my %ips; 
+
+	# split up data into groups by ip address
+	foreach my $key (keys %{$DATA}) {
+		my $ip = $DATA->{$key}->{"ip"};
+		my $addr = $DATA->{$key}->{"addr"};
+		$ips{$ip}->{$addr} = 1;
+	}
+
+	my $totalerors = 0;
+	my $totalnocom = 0;
+
+	# walk through ip address
+	foreach my $ip (keys %ips) {
+		my $sock = new IO::Socket::INET (PeerAddr => $ip, Proto => 'tcp' ); 
+		next if (!$sock);
+			
+		$sock->autoflush(1);
+		foreach my $addr (sort { $a <=> $b } keys %{$ips{$ip}}) {
+
+			my $skey = sprintf("%s, 0x%02x", $ip, $addr);
+
+			my $retcode = sp_get_values($sock, $ip, $addr);
+#			my $version = sp_get_version($sock, $addr);
+			my $errors = sp_get_errors($sock, $addr);
+
+			# update statistics
+			if (defined($STATS->{$skey}->{"requests"})) {
+				$STATS->{$skey}->{"requests"}++;
+			} else {
+				$STATS->{$skey}->{"requests"} = 1;
+			}
+
+			# update statistics
+			$errors = defined($errors) ? $errors : 0;
+			if (defined($STATS->{$skey}->{"err_packets"})) {
+				$STATS->{$skey}->{"err_packets"} += $errors;
+			} else {
+				$STATS->{$skey}->{"err_packets"} = $errors;
+			}
+
+			if (!defined($STATS->{$skey}->{"err_noresp"})) {
+				$STATS->{$skey}->{"err_noresp"} = 0;
+			}
+			$STATS->{$skey}->{"err_noresp"}++ if (!$retcode);
+			
+			if (!defined($STATS->{$skey}->{"reset_ts"})) {
+				$STATS->{$skey}->{"reset_ts"} = time();
+			}
+			$STATS->{$skey}->{"update_ts"} = time();
+			$STATS->{$skey}->{"last_ok"} = $retcode;
+
+			if (!defined($STATS->{$skey}->{"ok_update_ts"})) {
+				$STATS->{$skey}->{"ok_update_ts"} = time();
+			}
+
+			$STATS->{$skey}->{"ok_update_ts"} = time() if ($retcode);
+
+		}
+		close($sock);
+	}
+}
+
+# print statistics
+sub print_stats() {
+
+	my $res = "";
+	
+	foreach my $skey (sort keys %{$STATS}) {
+		$res .= sprintf "%s : [%4ds]  %4d %4d %4d  %s   [%2ds]\n", 
+			$skey,
+			$STATS->{$skey}->{"update_ts"} - $STATS->{$skey}->{"reset_ts"},
+			$STATS->{$skey}->{"requests"},
+			$STATS->{$skey}->{"err_noresp"},
+			$STATS->{$skey}->{"err_packets"},
+			$STATS->{$skey}->{"last_ok"} ? "OK" : "failed",
+			$STATS->{$skey}->{"update_ts"} - $STATS->{$skey}->{"ok_update_ts"}
+			if (!$STATS->{$skey}->{"last_ok"});
+	}
+
+	if ($res ne "") {
+		printf strftime("%Y-%m-%d.%H:%M:%S\n", localtime());
+		printf "IP                     ADDR                req. norep err_pkts\n";
+		print $res;
+		print "\n";
+	}
+
+}
+
+# print values
+sub print_values() {
+
+	foreach (sort { $DATA->{$a}->{"line"} <=> $DATA->{$b}->{"line"} } keys %{$DATA}) {
+		printf "%-15s ", $_;
+		if (defined($DATA->{$_}->{"value"})) {
+			printf "%8.3f", $DATA->{$_}->{"value"};
+		} else {
+			printf "    ?   ";
+		}
+		if (defined($DATA->{$_}->{"descr"})) {
+			printf "  %s", $DATA->{$_}->{"descr"};
+		}
+		printf "\n";
+	}
+}
+
+sub get_value($);
+sub get_value($) {
+	my ($key) = @_;
+
+	my $val = undef;
+
+	if (defined($EXPR->{$key})) {  #we found expression, so we try to found variables and eval it 
+		# varables are enclosed by % % 
+		my $expr = $EXPR->{$key};
+
+
+		while ($expr =~ /(.*)%{(.+?)}(.*)/) {	
+			my ($p1, $p2, $p3) = ($1, $2, $3);
+			$expr = $p1.get_value($p2).$p3;
+		}
+		$expr =~ s/%%/%/g;
+		my $res = eval $expr;	
+		printf "REP: %s -> %s = %s \n", $EXPR->{$key}, $expr, $res if ($DEBUG);
+	
+		return $res;	
+	}
+
+	if (defined($DATA->{$key}->{"value"}) && defined($DATA->{$key}->{"updated"})) {
+		if ($DATA->{$key}->{"updated"} + $VALID_DELAY > time()) {
+			$val = $DATA->{$key}->{"value"};
+		}
+	}
+	return $val;
+}
+
+# usage help
+sub usage() {
+	printf "Usage:\n\n";
+	printf " get_spinel <key>   : return data for the key. The data had to be downloaded by gdata\n";
+	exit 1;
+	
+}
+
+getopt("d",\%OPTS);
+if (defined($OPTS{'d'})) {
+	$DEBUG = 1; 
+}
+
+if ($0 =~ /.*\/get_spinel/) {
+	if (!defined($ARGV[0])) {
+		usage();
+	}
+
+	parse_config();
+	load_stat();
+	my $val = get_value($ARGV[0]);
+	if (defined($val)) {
+		printf "%s\n", $val;
+	} else {
+		printf "\n";
+	}
+	exit 0;
+}
+
+for (;;) {
+	parse_config();
+	load_all_sensors();
+	print_stats();
+	store_stat();
+	sleep(1);
+}
+
+
+
+
