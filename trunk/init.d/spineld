@@ -1,0 +1,52 @@
+#!/bin/bash
+#
+# chkconfig: 3 12 91
+# spineld  This script start/stop spinel daemon
+#
+# description: This script start/stop spinel daemon
+#
+
+DAEMON="/usr/sbin/spineld"
+FLAGS="-d 0 -u spineld "
+
+. /etc/init.d/functions
+
+# See how we were called.
+case "$1" in
+  start)
+		echo -n $"starting spinel daemon: "
+		#echo daemon $DAEMON $FLAGS 
+		daemon " $DAEMON $FLAGS"
+		RETVAL=$?
+		echo
+		if [ "$RETVAL" = 0 ] ; then
+			touch /var/lock/subsys/spineld
+		else
+			rm -f /var/lock/subsys/spineld
+		fi
+        ;;
+  stop)
+		if [ -f /var/lock/subsys/spineld ]; then
+			echo -n $"Stopping spinel daemon:"
+			kill $(ps ax | grep $(basename $DAEMON) | grep perl | cut -c1-6)
+			success;
+			rm -f /var/lock/subsys/spineld
+			echo
+		fi
+        ;;
+
+  status)
+        # No action to be taken here
+        ;;
+
+  restart|reload)
+		$0 stop
+        $0 start
+        ;;
+
+  *)
+        echo $"Usage: $0 {start|stop|status|restart}"
+        exit 1
+esac
+
+exit 0
