@@ -25,6 +25,10 @@ How to run:
 Todo:
  - Instalation .tgz, .rpm, ... packages
  - Better statistis 
+ - Add description how to connect spineld with zabbix 
+ - Better documentation 
+ - Screenshots of the screens in zabbix 
+ - Add zview script 
 
 Changelog:
  - 2009-09-03: Initial release
