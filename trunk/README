@@ -1,0 +1,32 @@
+
+Content of directory:
+
+ spineld        : spinel daemon (put into /usr/sbin/)
+ spinel         : spinel client interface (put into /usr/bin/)
+ spinel.conf    : configuration file (put into /etc/)
+ init.d/spineld : startup script for init.d based systems (Redhat, Centos, Fedora, SuSe) 
+                  put into /etc/init.d/
+
+How to run:
+ - Copy files into the specifed locations
+ - Create user spineld and group spineld with no password 
+ - Edit /etc/spinel.conf - add your devices an address
+ - Create /var/spool/spineld ad chenge ownership 
+   # chown spineld:spineld /var/spool/spineld
+ - Run the spinnel daemon. For first run it's better to run in debug mode 
+   /usr/sbin/spineld -d1 -u spineld 
+ - Check if the values have been loaded by run spinel -oa command 
+ - Check log file /var/log//messages for communications erros
+ - If everything goes ok stop the daemon and run through the startup script 
+   # /etc/init.d/spineld start 
+ - Add daemon into sesrvices running during a startup
+   # chkconfig spineld on
+
+Todo:
+ - Instalation .tgz, .rpm, ... packages
+ - Better statistis 
+
+Changelog:
+ - 2009-09-03: Initial release
+ - 2009-09-05: Several bugs removed 
+

@@ -1,10 +1,13 @@
 #!/usr/bin/perl -w 
 
-my $DEBUG 			= 0;
+my $VERSION			= "1.01 2009-09-08.01";
+my $DEBUG 			= 0;		# 0 - errors, 1 - all
 my $CONFIG 			= "/etc/spineld.conf";	# config file
 my $READ_TIMEOUT 	= 1;		# read timeout in seconds (used when a device doesn't response)
 my $STATFILE 		= "/var/spool/spineld/values.stat";
 my $VALID_DELAY		= 30;		# how long will be enquired value consodered as valid (solve read errors)
+my $LOGNAME        = substr($0, rindex($0, "/") + 1);;
+my $LOGFACILITY    = "daemon.info";
 my $DATA;					# structure for enquired data format 
                             # $DATA->{"key"}->{"ip"}		# ip address of the GNOME 485
                             # $DATA->{"key"}->{"addr"}	# RS 485 address
@@ -31,20 +34,81 @@ use IO::Socket;
 use Data::Dumper;
 use File::Basename;
 use Time::HiRes qw(usleep);
-use POSIX qw(strftime);
+use POSIX qw(strftime setsid);
 use Getopt::Std;
+use Sys::Syslog qw(:DEFAULT setlogsock);
+
+
+
+# logging
+sub mylog {
+	my ($msg, @par) = @_;
+	my $lmsg = sprintf($msg, @par);
+	if ($DEBUG > 0) {
+		printf "%s[%d]: %s\n", strftime("%Y-%m-%d.%H:%M:%S", localtime), $$, $lmsg;
+	}
+	setlogsock('unix');
+	openlog("$LOGNAME\[$$\]", 'ndelay', 'user');
+	syslog($LOGFACILITY, $lmsg);
+}
+
+# demonizace process
+sub daemonize() {
+	chdir '/'					or die "Can't chdir to /: $!";
+	open STDIN, '/dev/null'		or die "Can't read /dev/null: $!";
+	open STDOUT, '>/dev/null'	or die "Can't write to /dev/null: $!";
+	defined(my $pid = fork)		or die "Can't fork: $!";
+	exit if $pid;
+	setsid						or die "Can't start a new session: $!";
+	open STDERR, '>&STDOUT'		or die "Can't dup stdout: $!";
+}
+
+# cgange user
+sub chuser($) {
+	my ($user) = @_;
+
+	my ($login,$pass,$uid,$gid) = getpwnam($user);
+    # gid must be changed before uid. at least on my computer :)
+	$( = $gid;
+	$) = $gid;
+	$< = $uid;
+	$> = $uid;
+
+	## Check that we managed to change Group/User IDs properly...
+	## Change warn to die if it's important to you
+	if (  ((split(/ /,$)))[0] ne $gid) || ((split(/ /,$())[0] ne $gid)  ) {
+		warn "Couldn't Change Group ID!\n";
+	}
+
+	if (  ($> ne $uid) || ($< ne $uid)  ) {
+		mylog("Couldn't Change User ID!\n");
+		die "Couldn't Change User ID!\n";
+	}
+
+	mylog("switch to user %s (uid: %d, gid: %d)", $user, $uid, $gid);
+
+	## We don't need these anymore...
+	undef($login);
+	undef($pass);
+	undef($uid);
+	undef($gid);
+
+	# and so the program will actually RUN at this user:
+	fork and wait and exit;
+}
+
 
 
 # print string in hex format 
 # arg: prefix, string
-sub print_hex($$) {
-	my ($prefix, $data) = @_;
+sub format_hex($) {
+	my ($data) = @_;
+	my $res = "";
 
-	printf "%s ", $prefix;
 	foreach (split(//, $data)) {
-		printf "%02x ", ord("$_");
+		$res .= sprintf "%02x ", ord("$_");
 	}
-	print "\n";
+	return $res;
 }
 
 # compute checksum for spinel packet
@@ -72,7 +136,7 @@ sub hexnum($) {
 sub parse_config() {
 
     if ( ! -f $CONFIG ) {
-        printf "Config file %s not found\n", $CONFIG;
+        mylog("Config file %s not found\n", $CONFIG);
         exit 1;
     }
     open F1, "< $CONFIG";
@@ -110,7 +174,7 @@ sub parse_config() {
 sub load_stat() {
 	my $dir = dirname($STATFILE);
 	if ( ! -d  $dir ) {
-		printf STDERR "ERROR: Directory %s not found!\n", $dir;
+		mylog("ERROR: Directory %s not found!\n", $dir);
 		exit 1;
 	}
 	if ( -f $STATFILE ) {
@@ -119,17 +183,19 @@ sub load_stat() {
 		my $VAR1;
 		eval($data);
 		$DATA = undef;
-		$DATA = $VAR1;
+		$DATA = $VAR1->{'DATA'};
+		$STATS = $VAR1->{'STATS'};
 		close F1;
 	}
 }
 
 # store status file
 sub store_stat() {
+	my $mdata = {'DATA' => $DATA, 'STATS' => $STATS};
 	open F1, "> $STATFILE.$$";
-	print F1 Dumper($DATA);
+	print F1 Dumper($mdata);
 	close F1;
-	rename("$STATFILE.$$", "$STATFILE");
+	rename("$STATFILE.$$", "$STATFILE") || mylog("Can't update or rename file %s", $STATFILE);
 }
 
 
@@ -141,7 +207,15 @@ sub store_stat() {
 sub eval_val($$) {
 	my ($x, $expr) = @_;
 
+	return $x if (!defined($expr));
+
 	$expr =~ s/X/$x/i;
+	$expr =~ s/%{X}/$x/i;
+
+	if ($expr =~ /^(.+)$/) {
+		$expr = $1;
+	}
+
 	my $y = eval $expr;
 
 	return $y; 
@@ -204,7 +278,7 @@ sub sp_query($$$$$$) {
 	my ($sock, $addr, $sig, $inst, $udata, $utimeout) = @_;
 
 	my $data = sp_prepare_query($addr, $sig, $inst, $udata);
-	print_hex("SND:", $data) if ($DEBUG);
+	mylog(" SND: %s", format_hex($data)) if ($DEBUG);
 
 	# send data to the sensor
 	usleep(20 * 1000);		# sleep 20ms 
@@ -231,10 +305,12 @@ sub sp_query($$$$$$) {
 		last if ($ch eq pack("C", 0x0d));
 	}
 
-	print_hex("RCV:", $buff) if ($DEBUG);
-	$data = sp_extract_data($buff);
+	mylog(" RCV: %s", format_hex($buff)) if ($DEBUG);
+	my $rdata = sp_extract_data($buff);
+	mylog("Received invalid packet for send '%s', received '%s'", 
+		format_hex($data), format_hex($buff)) if (!defined($rdata));
 
-	return $data;
+	return $rdata;
 }
 
 # load data from sensor through 0x51 instruction and fill into $OUTPUT structure
@@ -242,6 +318,7 @@ sub sp_query($$$$$$) {
 #      addr: device address 
 sub sp_get_values($$$) {
 	my ($sock, $ip, $addr) = @_;
+
 
 	my $data = sp_query($sock, $addr, 0x0, 0x51, pack("C", 0x0), $READ_TIMEOUT);
 
@@ -334,6 +411,7 @@ sub load_all_sensors() {
 		$sock->autoflush(1);
 		foreach my $addr (sort { $a <=> $b } keys %{$ips{$ip}}) {
 
+			mylog("Reading %s, 0x%0x", $ip, $addr) if ($DEBUG);
 			my $skey = sprintf("%s, 0x%02x", $ip, $addr);
 
 			my $retcode = sp_get_values($sock, $ip, $addr);
@@ -372,6 +450,8 @@ sub load_all_sensors() {
 
 			$STATS->{$skey}->{"ok_update_ts"} = time() if ($retcode);
 
+			mylog("Read have done %s, 0x%0x: errors=%d, validdata=%d", $ip, $addr, $errors, $retcode) 
+			if ($DEBUG || $retcode == 0 || $errors > 0);
 		}
 		close($sock);
 	}
@@ -403,23 +483,6 @@ sub print_stats() {
 
 }
 
-# print values
-sub print_values() {
-
-	foreach (sort { $DATA->{$a}->{"line"} <=> $DATA->{$b}->{"line"} } keys %{$DATA}) {
-		printf "%-15s ", $_;
-		if (defined($DATA->{$_}->{"value"})) {
-			printf "%8.3f", $DATA->{$_}->{"value"};
-		} else {
-			printf "    ?   ";
-		}
-		if (defined($DATA->{$_}->{"descr"})) {
-			printf "  %s", $DATA->{$_}->{"descr"};
-		}
-		printf "\n";
-	}
-}
-
 sub get_value($);
 sub get_value($) {
 	my ($key) = @_;
@@ -433,7 +496,12 @@ sub get_value($) {
 
 		while ($expr =~ /(.*)%{(.+?)}(.*)/) {	
 			my ($p1, $p2, $p3) = ($1, $2, $3);
-			$expr = $p1.get_value($p2).$p3;
+			$val = get_value($p2);
+			if (defined($val)) {
+				$expr = $p1.get_value($p2).$p3;
+			} else {
+				return undef;
+			}
 		}
 		$expr =~ s/%%/%/g;
 		my $res = eval $expr;	
@@ -450,39 +518,91 @@ sub get_value($) {
 	return $val;
 }
 
+# print values
+sub print_values() {
+
+	foreach (sort { $DATA->{$a}->{"line"} <=> $DATA->{$b}->{"line"} } keys %{$DATA}) {
+		my $val =  get_value($_); 
+		printf "source    %-15s : %s\n", $_, defined($val) ? $val : '  ?  ';
+	}
+	foreach (sort keys %{$EXPR}) {
+		my $val =  get_value($_); 
+		printf "expr      %-15s : %s\n", $_, defined($val) ? $val : '  ?  ';
+	}
+}
+
 # usage help
-sub usage() {
+sub usage_spinel() {
 	printf "Usage:\n\n";
-	printf " get_spinel <key>   : return data for the key. The data had to be downloaded by gdata\n";
+	printf " spinel [ -o a | s ] | <key>  \n\n"; 
+	printf "   -oa  : print all values enquired by spineld\n";
+	printf "   -os  : print serial numbers of connected devices and communication counters\n";
+	printf "  <key> : return data for the key\n\n";
+	printf "Example:\n\n";
+	printf "  spinel -sa \n\n";
 	exit 1;
 	
 }
 
-getopt("d",\%OPTS);
-if (defined($OPTS{'d'})) {
-	$DEBUG = 1; 
+sub usage_spineld() {
+	printf "Usage:\n\n";
+	printf " spineld [ -u -d -v ]\n";
+	exit 1;
+	
 }
 
-if ($0 =~ /.*\/get_spinel/) {
-	if (!defined($ARGV[0])) {
-		usage();
-	}
+
+# main bodu
+$SIG{CHLD} = sub { wait(); };
+
+if (!getopt("d:u:q:o:", \%OPTS) || defined($OPTS{"?"})) {
+	usage();
+	exit 1;
+}
+
+if (defined($OPTS{"d"})) {
+	$DEBUG = $OPTS{"d"};
+}
+
+# the client code part (spinel)
+if ($0 =~ /.*\/get_spinel/ || $0 =~ /.*\/spinel$/) {
 
 	parse_config();
 	load_stat();
+	if (defined($OPTS{"o"}) && $OPTS{"o"} eq "a") {
+		print_values();
+		exit 0;
+	}
+	if (defined($OPTS{"o"}) && $OPTS{"o"} eq "s") {
+		print_statistics();
+		exit 0;
+	}
+	
+	#print_stats();
 	my $val = get_value($ARGV[0]);
 	if (defined($val)) {
 		printf "%s\n", $val;
+		exit 0;
 	} else {
 		printf "\n";
+		exit 2;
 	}
-	exit 0;
+	usage_spinel();
+	exit 1;
 }
 
+# the daemon mode part
+if (defined($OPTS{"u"})) {
+	chuser($OPTS{"u"});
+}
+
+if ($DEBUG == 0) {
+	daemonize();
+}
+mylog("Server started with debug level %d, version %s.", $DEBUG, $VERSION);
 for (;;) {
 	parse_config();
 	load_all_sensors();
-	print_stats();
 	store_stat();
 	sleep(1);
 }
