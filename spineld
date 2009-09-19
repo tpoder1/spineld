@@ -1,6 +1,6 @@
 #!/usr/bin/perl -w 
 
-my $VERSION			= "1.02 2009-09-18.02";
+my $VERSION			= "1.03 2009-09-19.01";
 my $DEBUG 			= 0;		# 0 - errors, 1 - all
 my $CONFIG 			= "/etc/spineld.conf";	# config file
 my $READ_TIMEOUT 	= 1;		# read timeout in seconds (used when a device doesn't response)
@@ -597,7 +597,9 @@ sub usage_spinel() {
 
 sub usage_spineld() {
 	printf "Usage:\n\n";
-	printf " spineld [ -u -d -v ]\n";
+	printf " spineld [ -u -d ]\n";
+	printf "  -u <user>    : switch to user <user>\n";
+	printf "  -d <level>   : set debug level (default: 0) and stay in foreground\n\n";
 	exit 1;
 	
 }
