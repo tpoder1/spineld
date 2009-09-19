@@ -1,11 +1,12 @@
 #!/usr/bin/perl -w 
 
-my $VERSION			= "1.01 2009-09-08.01";
+my $VERSION			= "1.02 2009-09-18.02";
 my $DEBUG 			= 0;		# 0 - errors, 1 - all
 my $CONFIG 			= "/etc/spineld.conf";	# config file
 my $READ_TIMEOUT 	= 1;		# read timeout in seconds (used when a device doesn't response)
 my $STATFILE 		= "/var/spool/spineld/values.stat";
-my $VALID_DELAY		= 30;		# how long will be enquired value consodered as valid (solve read errors)
+#my $VALID_DELAY		= 30;		# how long will be enquired value consodered as valid (solve read errors)
+my $VALID_DELAY		= 60;		# how long will be enquired value consodered as valid (solve read errors)
 my $LOGNAME        = substr($0, rindex($0, "/") + 1);;
 my $LOGFACILITY    = "daemon.info";
 my $DATA;					# structure for enquired data format 
@@ -33,7 +34,7 @@ use strict;
 use IO::Socket;
 use Data::Dumper;
 use File::Basename;
-use Time::HiRes qw(usleep);
+use Time::HiRes qw(usleep ualarm);
 use POSIX qw(strftime setsid);
 use Getopt::Std;
 use Sys::Syslog qw(:DEFAULT setlogsock);
@@ -85,7 +86,7 @@ sub chuser($) {
 		die "Couldn't Change User ID!\n";
 	}
 
-	mylog("switch to user %s (uid: %d, gid: %d)", $user, $uid, $gid);
+	mylog("Going to user %s (uid: %d, gid: %d)", $user, $uid, $gid);
 
 	## We don't need these anymore...
 	undef($login);
@@ -233,9 +234,10 @@ sub sp_extract_data($) {
 	my ($pre, $frm, $len, $addr, $sig, $ack) = unpack("CCnCCC", $pkt);
 
 	# check pre and frm 
-	return undef if (!defined($pre) || $pre != 0x2a);
-	return undef if (!defined($frm) || $frm != 0x61);
-	return undef if (!defined($ack) || $ack != 0x00);
+	return undef if (!defined($pre) || $pre != 0x2a);			# 
+	return undef if (!defined($frm) || $frm != 0x61);			# format
+	return undef if (!defined($ack) || $ack != 0x00);			# ack 
+	return undef if (unpack("C", substr($pkt, - 1)) != 0x0d);	# 0x0d  at the end of the packet
 
 	my $data = substr($pkt, 7, length($pkt) - 7 - 2);
 	my $csum = sp_cksum(substr($pkt, 0, length($pkt) - 2));
@@ -281,9 +283,8 @@ sub sp_query($$$$$$) {
 	mylog(" SND: %s", format_hex($data)) if ($DEBUG);
 
 	# send data to the sensor
-	usleep(20 * 1000);		# sleep 20ms 
+	usleep(10 * 1000);		# sleep 10ms 
 
-	print $sock $data; 
 	my $buff = "";
 	my $limit = 1000;
 	my $ch = '';
@@ -291,6 +292,7 @@ sub sp_query($$$$$$) {
 
 	# read data until 0x0d is sent or number of bytes is bigger than 1000	
 	# we'll use special eval code to read with timeout
+	print $sock $data; 
 
 	while ($limit-- > 0) {
 		eval {
@@ -301,8 +303,9 @@ sub sp_query($$$$$$) {
 		};
 		last if ($@ eq "alarm\n");
 #		printf "# %x %d %s -\n", unpack("C", $ch), $timeout, $@;
+		# check if the packet has been already received
 		$buff .= $ch;
-		last if ($ch eq pack("C", 0x0d));
+		last if (defined(sp_extract_data($buff)));
 	}
 
 	mylog(" RCV: %s", format_hex($buff)) if ($DEBUG);
@@ -318,9 +321,16 @@ sub sp_query($$$$$$) {
 #      addr: device address 
 sub sp_get_values($$$) {
 	my ($sock, $ip, $addr) = @_;
+	my ($data) = undef;
 
+	# TQS3 use differend instruction for data reading. 
+	my $skey = sprintf("%s, 0x%02x", $ip, $addr);
 
-	my $data = sp_query($sock, $addr, 0x0, 0x51, pack("C", 0x0), $READ_TIMEOUT);
+	if (!defined($STATS->{$skey}->{"info"}) || $STATS->{$skey}->{"info"} =~ /TQS3/) {
+		$data = sp_query($sock, $addr, 0x0, 0x51, undef, $READ_TIMEOUT);
+	} else {
+		$data = sp_query($sock, $addr, 0x0, 0x51, pack("C", 0x0), $READ_TIMEOUT);
+	}
 
 	return 0 if (!defined($data) || length($data) < 7);
 
@@ -359,32 +369,48 @@ sub sp_get_errors($$) {
 	}
 }
 
-# get version through 0xf3 instruction and return 
+# get version through (0xf3) and serial nimber (0xf3)  and return 
 # par: socket with open connection to RS485 converter
 #      addr: device address 
-sub sp_get_version($$) {
+sub sp_get_info($$) {
 	my ($sock, $addr) = @_;
+	my ($version, $serial, $product, $other) = ("?", "?", "?", "?");
 
 	my $data = sp_query($sock, $addr, 0x0, 0xF3, undef, $READ_TIMEOUT);
 	if (defined($data)) {
-		return unpack("a*", $data);
+		$version = unpack("a*", $data);
 	} else {
 		return undef;
 	}
+
+	$data = sp_query($sock, $addr, 0x0, 0xFA, undef, $READ_TIMEOUT);
+	if (defined($data)) {
+		($product,  $serial, $other) = unpack("nna*", $data);
+		$product = sprintf("%04d", $product);
+		$serial = sprintf("%04d", $serial);
+	} else {
+		return undef;
+	}
+	
+	# concate serial number and product version
+	my @arr = split(/ /, $version);
+	foreach my $x (0 .. @arr - 1) { 
+		if ($arr[$x] =~ /v$product(.+);/) {
+			$arr[$x] = sprintf("v%s%s/%s;", $product, $1, $serial);
+		}
+	}
+	#return sprintf("%s; SN: %s/%s", $version, $product, $serial);
+	return join(" ", @arr);;
 }
 
-# get serial number through 0xf3 instruction and return 
+# reset device through 0xe3 instruction and return 
 # par: socket with open connection to RS485 converter
 #      addr: device address 
-sub sp_get_serial($$) {
+sub sp_reset($$) {
 	my ($sock, $addr) = @_;
 
-	my $data = sp_query($sock, $addr, 0x0, 0xFA, undef, $READ_TIMEOUT);
-	if (defined($data)) {
-		return unpack("nna*", $data);
-	} else {
-		return undef;
-	}
+	sp_query($sock, $addr, 0x0, 0xE3, undef, $READ_TIMEOUT);
+	sleep(2);
 }
 
 # take data from $DATA, group by IP address:port, open 
@@ -414,6 +440,14 @@ sub load_all_sensors() {
 			mylog("Reading %s, 0x%0x", $ip, $addr) if ($DEBUG);
 			my $skey = sprintf("%s, 0x%02x", $ip, $addr);
 
+			my $info = sp_get_info($sock, $addr);
+
+			# set device info
+			if (!defined($STATS->{$skey}->{"info"}) || $STATS->{$skey}->{"info"} ne $info) {
+				$STATS->{$skey}->{"info"} = $info;
+				mylog("Device found on %s, 0x%x : %s", $ip, $addr, $info);
+			}
+
 			my $retcode = sp_get_values($sock, $ip, $addr);
 #			my $version = sp_get_version($sock, $addr);
 			my $errors = sp_get_errors($sock, $addr);
@@ -424,6 +458,11 @@ sub load_all_sensors() {
 			} else {
 				$STATS->{$skey}->{"requests"} = 1;
 			}
+
+			#reset device if the errors was detect and device is TQS3 
+#			if ($info =~ /TQS3/ && $errors == 8) {
+#				$errors = 0;
+#			}
 
 			# update statistics
 			$errors = defined($errors) ? $errors : 0;
@@ -441,14 +480,19 @@ sub load_all_sensors() {
 			if (!defined($STATS->{$skey}->{"reset_ts"})) {
 				$STATS->{$skey}->{"reset_ts"} = time();
 			}
-			$STATS->{$skey}->{"update_ts"} = time();
-			$STATS->{$skey}->{"last_ok"} = $retcode;
 
 			if (!defined($STATS->{$skey}->{"ok_update_ts"})) {
 				$STATS->{$skey}->{"ok_update_ts"} = time();
 			}
 
+			if (!defined($STATS->{$skey}->{"fail_update_ts"})) {
+				$STATS->{$skey}->{"fail_update_ts"} = time();
+			}
+
 			$STATS->{$skey}->{"ok_update_ts"} = time() if ($retcode);
+			$STATS->{$skey}->{"fail_update_ts"} = time() if (!$retcode);
+			$STATS->{$skey}->{"update_ts"} = time();
+			$STATS->{$skey}->{"last_ok"} = $retcode;
 
 			mylog("Read have done %s, 0x%0x: errors=%d, validdata=%d", $ip, $addr, $errors, $retcode) 
 			if ($DEBUG || $retcode == 0 || $errors > 0);
@@ -461,22 +505,29 @@ sub load_all_sensors() {
 sub print_stats() {
 
 	my $res = "";
+	my $lastip = "";
 	
 	foreach my $skey (sort keys %{$STATS}) {
-		$res .= sprintf "%s : [%4ds]  %4d %4d %4d  %s   [%2ds]\n", 
-			$skey,
+		my ($ip, $addr) = split(/,/, $skey);
+		if ($ip ne $lastip) {
+			$res .= sprintf("%s\n", $ip);
+			$lastip = $ip;
+		}
+		my  $updtime = $STATS->{$skey}->{"update_ts"};
+		$updtime -= $STATS->{$skey}->{"last_ok"} ? 
+					$STATS->{$skey}->{"fail_update_ts"} : $STATS->{$skey}->{"ok_update_ts"};
+		$res .= sprintf "  %s  %9ds %9d %9d %9d    %s\n", 
+			$addr,
 			$STATS->{$skey}->{"update_ts"} - $STATS->{$skey}->{"reset_ts"},
 			$STATS->{$skey}->{"requests"},
 			$STATS->{$skey}->{"err_noresp"},
 			$STATS->{$skey}->{"err_packets"},
-			$STATS->{$skey}->{"last_ok"} ? "OK" : "failed",
-			$STATS->{$skey}->{"update_ts"} - $STATS->{$skey}->{"ok_update_ts"}
-			if (!$STATS->{$skey}->{"last_ok"});
+			$STATS->{$skey}->{"info"};
 	}
 
 	if ($res ne "") {
-		printf strftime("%Y-%m-%d.%H:%M:%S\n", localtime());
-		printf "IP                     ADDR                req. norep err_pkts\n";
+		#printf strftime("%Y-%m-%d.%H:%M:%S\n", localtime());
+		printf "   Aaddr  SinceStart   Requesets  NoReply   ErrPkts LastState\n";
 		print $res;
 		print "\n";
 	}
@@ -556,7 +607,7 @@ sub usage_spineld() {
 $SIG{CHLD} = sub { wait(); };
 
 if (!getopt("d:u:q:o:", \%OPTS) || defined($OPTS{"?"})) {
-	usage();
+	usage_spineld();
 	exit 1;
 }
 
@@ -574,7 +625,7 @@ if ($0 =~ /.*\/get_spinel/ || $0 =~ /.*\/spinel$/) {
 		exit 0;
 	}
 	if (defined($OPTS{"o"}) && $OPTS{"o"} eq "s") {
-		print_statistics();
+		print_stats();
 		exit 0;
 	}
 	
