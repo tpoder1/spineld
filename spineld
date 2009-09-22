@@ -661,6 +661,93 @@ for (;;) {
 	sleep(1);
 }
 
+1;
+
+__END__
+=head1 NAME
+
+spineld - daemon which collets data from sensors using the spinel protocol
+spinel  - user interface to show collected data by spineld
+
+=head1 SYNOPIS
+
+spineld [OPTION] 
+spinel  [OPTION] [<item>]
+
+=head1 DESCRIPTION
+This daemon allows load data from devices with spinel protocol 
+support(http://www.papouch.com/shop/scripts/_spinel.asp). This 
+protocol is supported by almost measure boards and other equipments 
+produced by Papouch s.r.o. (http://www.papouch.com/en/). The daemon 
+periodically gains data from configured sensors and provides output 
+for other system. There also client interface which allows user to 
+display data collected by the daemon. The system also privides 
+interface to zabbix monitoring system. 
+
+=head1 OPTIONS
+
+spineld -u <user> -d <level> 
+ 
+   -u   - switch daemon to the <user> after start
+   -d   - debug level; with the debug level > 0 the daemon will stay in foreground
+
+spinel [ -a o|s ] | [ <item> ]
+  
+   -ao   - display values of the all items defined in the config file
+   -as   - display statistics regarding to the spinel devices
+  <item> - display value; if the value is nit valit an empty line is returned 
+
+=head1 HOMEPAGE, DOWNLOAD
+Homepage: http://code.google.com/p/spineld/
+Download: http://code.google.com/p/spineld/downloads/list
+
+=head1 INETGRATION WITH ZABBIX MONITORING SYSTEM
+
+Zabbix (http://www.zabbix.com)) is huge monitoring system. Spineld have extensions which
+allows zabbix server to get data from the devices. For this porpouse yuo can use 
+spinel command. The follow example shows how to proceed to carry out integration with 
+the zabbix system.
+
+1. Install the spineld package into your system.
+2. Configure devicen in /etc/spineld.conf and run spinel daemon (/etc/init.d/spineld start)
+3. Check if data are downloaded correctly (spinel -oa, sponel -os)
+4. If the directory /etc/zabbix/externalscripts/ create link to spinel command 
+    (ln -s /usr/bin/spinel /etc/zabbix/externalscripts/spinel)
+5. Connect into zabbix web interface and go to "Configuration" -> "Items" and create a new one. 
+6. Into the key item fill in the follow string:
+   spinel[<item>] 
+  other items fill in as you need. 
+
+=head1 CONFIG FILE
+
+=head1 CHANGES
+ - 2009-09-03: Initial release
+ - 2009-09-05: Several bugs removed 
+ For additionl changes see http://code.google.com/p/spineld/source/list
 
 
+=head1 AUTHOR
+
+Tomas Podermasnki at Brno University of Technology, <tpoder@cis.vutbr.cz>
+
+=head1 REPORTING BUGS
+
+Bugs please report directly to the author.
+
+=head1 COPYRIGHT
+
+This is free software. You may redistribute copies of it under the terms of the
+GNU General Public License <http://www.gnu.org/licenses/gpl.html>.
+
+=head1 EXTERNAL LINKS
+
+Spinel protocol: 
+   http://papouch.com/shop/scripts/_spinel.asp
+
+A devices which support spinel protocol (measure devices, thermomethers, ...): 
+http://papouch.com/shop/scripts/_list.asp?kat=4&pages=1
+http://papouch.com/shop/scripts/_list.asp?kat=3&pages=1
+http://www.papouch.com/en/products.asp?dir=measuring
+http://www.papouch.com/en/products.asp?dir=thermometers
+ 
 
