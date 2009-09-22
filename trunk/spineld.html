@@ -1,0 +1,149 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>spineld - daemon which collects data from sensors using the spinel protocol
+spinel  - user interface to show collected data by spineld</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@localhost" />
+</head>
+
+<body style="background-color: white">
+
+<p><a name="__index__"></a></p>
+<!-- INDEX BEGIN -->
+
+<ul>
+
+	<li><a href="#synopis">SYNOPIS</a></li>
+	<li><a href="#description">DESCRIPTION</a></li>
+	<li><a href="#options">OPTIONS</a></li>
+	<li><a href="#homepage__download">HOMEPAGE, DOWNLOAD</a></li>
+	<li><a href="#inetgration_with_zabbix_monitoring_system">INETGRATION WITH ZABBIX MONITORING SYSTEM</a></li>
+	<li><a href="#config_file">CONFIG FILE</a></li>
+	<li><a href="#changes">CHANGES</a></li>
+	<li><a href="#author">AUTHOR</a></li>
+	<li><a href="#reporting_bugs">REPORTING BUGS</a></li>
+	<li><a href="#copyright">COPYRIGHT</a></li>
+	<li><a href="#external_links">EXTERNAL LINKS</a></li>
+</ul>
+<!-- INDEX END -->
+
+<hr />
+<p>
+</p>
+<h1><a name="synopis">SYNOPIS</a></h1>
+<p>spineld [OPTION] 
+spinel  [OPTION] [&lt;item&gt;]</p>
+<p>
+</p>
+<hr />
+<h1><a name="description">DESCRIPTION</a></h1>
+<p>This daemon allows load data from devices with spinel protocol 
+support(http://www.papouch.com/shop/scripts/_spinel.asp). This 
+protocol is supported by almost measure boards and other equipments 
+produced by Papouch s.r.o. (http://www.papouch.com/en/). The daemon 
+periodically gains data from configured sensors and provides output 
+for other system. There also client interface which allows user to 
+display data collected by the daemon. The system also provides 
+interface to zabbix monitoring system.</p>
+<p>
+</p>
+<hr />
+<h1><a name="options">OPTIONS</a></h1>
+<p>spineld -u &lt;user&gt; -d &lt;level&gt; 
+</p>
+<pre>
+
+   -u   - switch daemon to the &lt;user&gt; after start
+   -d   - debug level; with the debug level &gt; 0 the daemon will stay in foreground</pre>
+<p>spinel [ -a o|s ] | [ &lt;item&gt; ]
+</p>
+<pre>
+
+   -ao   - display values of the all items defined in the config file
+   -as   - display statistics regarding to the spinel devices
+  &lt;item&gt; - display value; if the value is not valid an empty line is returned</pre>
+<p>
+</p>
+<hr />
+<h1><a name="homepage__download">HOMEPAGE, DOWNLOAD</a></h1>
+<p>Homepage: <a href="http://code.google.com/p/spineld/">http://code.google.com/p/spineld/</a>
+Download: <a href="http://code.google.com/p/spineld/downloads/list">http://code.google.com/p/spineld/downloads/list</a></p>
+<p>
+</p>
+<hr />
+<h1><a name="inetgration_with_zabbix_monitoring_system">INETGRATION WITH ZABBIX MONITORING SYSTEM</a></h1>
+<p>Zabbix (http://www.zabbix.com)) is huge monitoring system. Spineld have extensions which
+allows zabbix server to get data from the devices. For this purpose you can use 
+spinel command. The follow example shows how to proceed to carry out integration with 
+the zabbix system.</p>
+<p>1. Install the spineld package into your system.
+2. Configure device in /etc/spineld.conf and run spinel daemon (/etc/init.d/spineld start)
+3. Check if data are downloaded correctly (spinel -oa, spinel -os)
+4. If the directory /etc/zabbix/externalscripts/ create link to spinel command 
+    (ln -s /usr/bin/spinel /etc/zabbix/externalscripts/spinel)
+5. Connect into zabbix web interface and go to ``Configuration'' -&gt; ``Items'' and create a new one. 
+6. Into the key item fill in the follow string:
+   spinel[&lt;item&gt;] 
+  other items fill in as you need.</p>
+<p>
+</p>
+<hr />
+<h1><a name="config_file">CONFIG FILE</a></h1>
+<p>Spineld used the text based config file. Each line describes one measured value. As the 
+parameter of the line device ip adders, spinel address and channel number are required. 
+There are also possibility to have got a special values which are evaluated from 
+the basic (source) values. For more detailed description of the config  file, please
+see into distribution spineld.conf (/etc/spineld.conf) file.</p>
+<p>Examples of the lines in the config:</p>
+<pre>
+ source pwr_1         147.229.255.122:10001     0x1    1     x/300          # AC source 1
+ source pwr_2         147.229.255.122:10001     0x1    2     x/300          # AC source 2</pre>
+<pre>
+ expr  sum_1_2       %{pwr_1} + %{pwr_2}                                                                        # Sum</pre>
+<p>
+</p>
+<hr />
+<h1><a name="changes__20090903__initial_release__20090905__several_bugs_removed_for_additional_changes_see_http___code_google_com_p_spineld_source_list">CHANGES
+ - 2009-09-03: Initial release
+ - 2009-09-05: Several bugs removed 
+ For additional changes see <a href="http://code.google.com/p/spineld/source/list">http://code.google.com/p/spineld/source/list</a></a></h1>
+<p>
+</p>
+<hr />
+<h1><a name="author">AUTHOR</a></h1>
+<p>Tomas Podermasnki at Brno University of Technology, &lt;<a href="mailto:tpoder@cis.vutbr.cz">tpoder@cis.vutbr.cz</a>&gt;</p>
+<p>
+</p>
+<hr />
+<h1><a name="reporting_bugs">REPORTING BUGS</a></h1>
+<p>Bugs please report directly to the author.</p>
+<p>
+</p>
+<hr />
+<h1><a name="copyright">COPYRIGHT</a></h1>
+<p>This is free software. You may redistribute copies of it under the terms of the
+GNU General Public License &lt;http://www.gnu.org/licenses/gpl.html&gt;.
+
+</p>
+<p>
+</p>
+<hr />
+<h1><a name="external_links">EXTERNAL LINKS</a></h1>
+<p>Spinel protocol: 
+   <a href="http://papouch.com/shop/scripts/_spinel.asp">http://papouch.com/shop/scripts/_spinel.asp</a>
+
+</p>
+<p>A devices which support spinel protocol (measure devices, thermometers, ...): 
+<a href="http://papouch.com/shop/scripts/_list.asp?kat=4&pages=1">http://papouch.com/shop/scripts/_list.asp?kat=4&pages=1</a>
+<a href="http://papouch.com/shop/scripts/_list.asp?kat=3&pages=1">http://papouch.com/shop/scripts/_list.asp?kat=3&pages=1</a>
+<a href="http://www.papouch.com/en/products.asp?dir=measuring">http://www.papouch.com/en/products.asp?dir=measuring</a>
+<a href="http://www.papouch.com/en/products.asp?dir=thermometers">http://www.papouch.com/en/products.asp?dir=thermometers</a>
+ 
+
+</p>
+
+</body>
+
+</html>
