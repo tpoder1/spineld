@@ -53,8 +53,4 @@ rpm: tar
 dist: tar rpm 
 		ls -al dist/*
 
-publish: dist 
-		scp rdbackup.html tpoder,rdbackup@web.sourceforge.net:htdocs/index.html
-		rsync -avP  dist/ tpoder@frs.sourceforge.net:uploads/
-
 
