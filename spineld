@@ -5,15 +5,15 @@ my $DEBUG 			= 0;		# 0 - errors, 1 - all
 my $CONFIG 			= "/etc/spineld.conf";	# config file
 my $READ_TIMEOUT 	= 1;		# read timeout in seconds (used when a device doesn't response)
 my $STATFILE 		= "/var/spool/spineld/values.stat";
-#my $VALID_DELAY		= 30;		# how long will be enquired value consodered as valid (solve read errors)
-my $VALID_DELAY		= 60;		# how long will be enquired value consodered as valid (solve read errors)
+#my $VALID_DELAY		= 30;		# how long will be obtained value considered as valid (solve read errors)
+my $VALID_DELAY		= 60;		# how long will be obtained value considered as valid (solve read errors)
 my $LOGNAME        = substr($0, rindex($0, "/") + 1);;
 my $LOGFACILITY    = "daemon.info";
-my $DATA;					# structure for enquired data format 
+my $DATA;					# structure for obtained data format 
                             # $DATA->{"key"}->{"ip"}		# ip address of the GNOME 485
                             # $DATA->{"key"}->{"addr"}	# RS 485 address
                             # $DATA->{"key"}->{"chan"}	# channel 
-                            # $DATA->{"key"}->{"raw_value"}   # value enquired from a device
+                            # $DATA->{"key"}->{"raw_value"}   # value obtained from a device
                             # $DATA->{"key"}->{"value"}   # final value (= raw_value * koef_a + koef_b)
                             # $DATA->{"key"}->{"valid"}   # flag if value is valid
                             # $DATA->{"key"}->{"expr"}    # conversion expression
@@ -224,8 +224,8 @@ sub eval_val($$) {
 
 # check data received by the server and extract data from packet
 # arg: data received as a response from a sensor
-# return: data field part extractet from the packet
-# i       undef  when data can't be axtracted 
+# return: data field part extracted from the packet
+# i       undef  when data can't be extracted 
 sub sp_extract_data($) {
 	my ($pkt) = @_;
 
@@ -275,7 +275,7 @@ sub sp_prepare_query($$$$) {
 	
 }
 
-# prepare query and wait fot the answer 
+# prepare query and wait for the answer 
 sub sp_query($$$$$$) {
 	my ($sock, $addr, $sig, $inst, $udata, $utimeout) = @_;
 
@@ -323,7 +323,7 @@ sub sp_get_values($$$) {
 	my ($sock, $ip, $addr) = @_;
 	my ($data) = undef;
 
-	# TQS3 use differend instruction for data reading. 
+	# TQS3 use different instruction for data reading. 
 	my $skey = sprintf("%s, 0x%02x", $ip, $addr);
 
 	if (!defined($STATS->{$skey}->{"info"}) || $STATS->{$skey}->{"info"} =~ /TQS3/) {
@@ -355,7 +355,7 @@ sub sp_get_values($$$) {
 	return 1;
 }
 
-# load number of communication errors hrough 0xf4 instructio and return 
+# load number of communication errors through 0xf4 instruction and return 
 # par: socket with open connection to RS485 converter
 #      addr: device address 
 sub sp_get_errors($$) {
@@ -369,7 +369,7 @@ sub sp_get_errors($$) {
 	}
 }
 
-# get version through (0xf3) and serial nimber (0xf3)  and return 
+# get version through (0xf3) and serial number (0xf3)  and return 
 # par: socket with open connection to RS485 converter
 #      addr: device address 
 sub sp_get_info($$) {
@@ -392,7 +392,7 @@ sub sp_get_info($$) {
 		return undef;
 	}
 	
-	# concate serial number and product version
+	# concatenate serial number and product version
 	my @arr = split(/ /, $version);
 	foreach my $x (0 .. @arr - 1) { 
 		if ($arr[$x] =~ /v$product(.+);/) {
@@ -606,7 +606,7 @@ sub usage_spineld() {
 }
 
 
-# main bodu
+# main body
 $SIG{CHLD} = sub { wait(); };
 
 if (!getopt("d:u:q:o:", \%OPTS) || defined($OPTS{"?"})) {
@@ -666,7 +666,7 @@ for (;;) {
 __END__
 =head1 NAME
 
-spineld - daemon which collets data from sensors using the spinel protocol
+spineld - daemon which collects data from sensors using the spinel protocol
 spinel  - user interface to show collected data by spineld
 
 =head1 SYNOPIS
@@ -674,15 +674,18 @@ spinel  - user interface to show collected data by spineld
 spineld [OPTION] 
 spinel  [OPTION] [<item>]
 
+
 =head1 DESCRIPTION
+
 This daemon allows load data from devices with spinel protocol 
 support(http://www.papouch.com/shop/scripts/_spinel.asp). This 
 protocol is supported by almost measure boards and other equipments 
 produced by Papouch s.r.o. (http://www.papouch.com/en/). The daemon 
 periodically gains data from configured sensors and provides output 
 for other system. There also client interface which allows user to 
-display data collected by the daemon. The system also privides 
+display data collected by the daemon. The system also provides 
 interface to zabbix monitoring system. 
+
 
 =head1 OPTIONS
 
@@ -695,22 +698,24 @@ spinel [ -a o|s ] | [ <item> ]
   
    -ao   - display values of the all items defined in the config file
    -as   - display statistics regarding to the spinel devices
-  <item> - display value; if the value is nit valit an empty line is returned 
+  <item> - display value; if the value is not valid an empty line is returned 
 
 =head1 HOMEPAGE, DOWNLOAD
+
 Homepage: http://code.google.com/p/spineld/
 Download: http://code.google.com/p/spineld/downloads/list
+
 
 =head1 INETGRATION WITH ZABBIX MONITORING SYSTEM
 
 Zabbix (http://www.zabbix.com)) is huge monitoring system. Spineld have extensions which
-allows zabbix server to get data from the devices. For this porpouse yuo can use 
+allows zabbix server to get data from the devices. For this purpose you can use 
 spinel command. The follow example shows how to proceed to carry out integration with 
 the zabbix system.
 
 1. Install the spineld package into your system.
-2. Configure devicen in /etc/spineld.conf and run spinel daemon (/etc/init.d/spineld start)
-3. Check if data are downloaded correctly (spinel -oa, sponel -os)
+2. Configure device in /etc/spineld.conf and run spinel daemon (/etc/init.d/spineld start)
+3. Check if data are downloaded correctly (spinel -oa, spinel -os)
 4. If the directory /etc/zabbix/externalscripts/ create link to spinel command 
     (ln -s /usr/bin/spinel /etc/zabbix/externalscripts/spinel)
 5. Connect into zabbix web interface and go to "Configuration" -> "Items" and create a new one. 
@@ -718,33 +723,51 @@ the zabbix system.
    spinel[<item>] 
   other items fill in as you need. 
 
+
 =head1 CONFIG FILE
+
+Spineld used the text based config file. Each line describes one measured value. As the 
+parameter of the line device ip adders, spinel address and channel number are required. 
+There are also possibility to have got a special values which are evaluated from 
+the basic (source) values. For more detailed description of the config  file, please
+see into distribution spineld.conf (/etc/spineld.conf) file. 
+
+Examples of the lines in the config:
+
+ source pwr_1         147.229.255.122:10001     0x1    1     x/300          # AC source 1
+ source pwr_2         147.229.255.122:10001     0x1    2     x/300          # AC source 2
+
+ expr  sum_1_2       %{pwr_1} + %{pwr_2}									# Sum 
+
 
 =head1 CHANGES
  - 2009-09-03: Initial release
  - 2009-09-05: Several bugs removed 
- For additionl changes see http://code.google.com/p/spineld/source/list
+ For additional changes see http://code.google.com/p/spineld/source/list
 
 
 =head1 AUTHOR
 
 Tomas Podermasnki at Brno University of Technology, <tpoder@cis.vutbr.cz>
 
+
 =head1 REPORTING BUGS
 
 Bugs please report directly to the author.
+
 
 =head1 COPYRIGHT
 
 This is free software. You may redistribute copies of it under the terms of the
 GNU General Public License <http://www.gnu.org/licenses/gpl.html>.
 
+
 =head1 EXTERNAL LINKS
 
 Spinel protocol: 
    http://papouch.com/shop/scripts/_spinel.asp
 
-A devices which support spinel protocol (measure devices, thermomethers, ...): 
+A devices which support spinel protocol (measure devices, thermometers, ...): 
 http://papouch.com/shop/scripts/_list.asp?kat=4&pages=1
 http://papouch.com/shop/scripts/_list.asp?kat=3&pages=1
 http://www.papouch.com/en/products.asp?dir=measuring
