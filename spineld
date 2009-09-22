@@ -596,6 +596,7 @@ sub usage_spinel() {
 }
 
 sub usage_spineld() {
+	printf "spineld, version %s\n\n", $VERSION;
 	printf "Usage:\n\n";
 	printf " spineld [ -u -d ]\n";
 	printf "  -u <user>    : switch to user <user>\n";
