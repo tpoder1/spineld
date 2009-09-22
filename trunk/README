@@ -1,4 +1,6 @@
 
+
+
 Content of directory:
 
  spineld        : spinel daemon (put into /usr/sbin/)
@@ -33,4 +35,10 @@ Todo:
 Changelog:
  - 2009-09-03: Initial release
  - 2009-09-05: Several bugs removed 
+
+Contact:
+  Tomas Podermanski <tpoder@cis.vutbr.cz>
+
+Licence:
+	GPLv3
 
