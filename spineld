@@ -1,6 +1,6 @@
 #!/usr/bin/perl -w 
 
-my $VERSION			= "1.03 2009-09-19.01";
+my $VERSION			= "1.04 2011-10-03.01";
 my $DEBUG 			= 0;		# 0 - errors, 1 - all
 my $CONFIG 			= "/etc/spineld.conf";	# config file
 my $READ_TIMEOUT 	= 1;		# read timeout in seconds (used when a device doesn't response)
@@ -29,6 +29,7 @@ my $STATS;					# statistics info per a device
 my $EXPR;					# description of expressions for computed values
 							# $EXPR->{"key"} = <expression>
 my %OPTS;
+
 
 use strict;
 use IO::Socket;
@@ -62,6 +63,7 @@ sub daemonize() {
 	exit if $pid;
 	setsid						or die "Can't start a new session: $!";
 	open STDERR, '>&STDOUT'		or die "Can't dup stdout: $!";
+	$0 = $LOGNAME;
 }
 
 # cgange user
@@ -292,11 +294,32 @@ sub sp_query($$$$$$) {
 
 	# read data until 0x0d is sent or number of bytes is bigger than 1000	
 	# we'll use special eval code to read with timeout
-	print $sock $data; 
+	printf "XX1.4\n";
+	eval {
+		printf "XX1.4.1 $sock %s %s \n", unpack("H*", $data), unpack("H*", $sock->connected());
+
+		printf Dumper(\$sock);
+#		print $sock $data; 
+		my $connected = $sock->connected();
+		if (defined($connected)) {
+			$sock->send($data); 
+			printf "XX1.4.2\n";
+		} else {
+			printf "XX1.4.4\n";
+			#die "socket not connected!!\n";
+			printf "socket not connected!!\n";
+		}
+	};
+
+	printf "XX1.4.3\n";
+	if ($@) {
+		mylog("Can not write data to socket\n");
+		exit 1;
+	}
 
 	while ($limit-- > 0) {
 		eval {
-			local $SIG{ALRM} = sub { die "alarm\n" }; # NB: \n required
+			local $SIG{ALRM} = sub { die("alarm\n"); }; # NB: \n required
 			alarm $utimeout;
 			my $nread = sysread($sock, $ch, 1);
 			alarm 0;
@@ -582,9 +605,12 @@ sub print_values() {
 	}
 }
 
-# usage help
-sub usage_spinel() {
+sub usage_spineld() {
+	printf "spineld, version %s\n\n", $VERSION;
 	printf "Usage:\n\n";
+	printf " spineld [ -u -d ]\n";
+	printf "  -u <user>    : switch to user <user>\n";
+	printf "  -d <level>   : set debug level (default: 0) and stay in foreground\n\n";
 	printf " spinel [ -o a | s ] | <key>  \n\n"; 
 	printf "   -oa  : print all values enquired by spineld\n";
 	printf "   -os  : print serial numbers of connected devices and communication counters\n";
@@ -595,21 +621,11 @@ sub usage_spinel() {
 	
 }
 
-sub usage_spineld() {
-	printf "spineld, version %s\n\n", $VERSION;
-	printf "Usage:\n\n";
-	printf " spineld [ -u -d ]\n";
-	printf "  -u <user>    : switch to user <user>\n";
-	printf "  -d <level>   : set debug level (default: 0) and stay in foreground\n\n";
-	exit 1;
-	
-}
-
 
 # main body
 $SIG{CHLD} = sub { wait(); };
 
-if (!getopt("d:u:q:o:", \%OPTS) || defined($OPTS{"?"})) {
+if (!getopts("d:u:q:o:", \%OPTS) || defined($OPTS{"?"})) {
 	usage_spineld();
 	exit 1;
 }
@@ -633,7 +649,7 @@ if ($0 =~ /.*\/get_spinel/ || $0 =~ /.*\/spinel$/) {
 	}
 	
 	#print_stats();
-	my $val = get_value($ARGV[0]);
+	my $val = get_value($ARGV[1]);
 	if (defined($val)) {
 		printf "%s\n", $val;
 		exit 0;
@@ -641,7 +657,7 @@ if ($0 =~ /.*\/get_spinel/ || $0 =~ /.*\/spinel$/) {
 		printf "\n";
 		exit 2;
 	}
-	usage_spinel();
+	usage_spineld();
 	exit 1;
 }
 
