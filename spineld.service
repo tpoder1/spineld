@@ -1,0 +1,12 @@
+[Unit]
+Description=Spineld service
+After=syslog.target network.target
+
+[Service]
+Type=forking
+ExecStart=/etc/init.d/spineld start
+ExecReload=/etc/init.d/spineld reload
+ExecStop=/etc/init.d/spineld stop
+
+[Install]
+WantedBy=multi-user.target
